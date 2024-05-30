@@ -1,0 +1,34 @@
+[alias]
+
+ch = "check --features esp-hal/embassy-time-timg0"
+
+[target.riscv32imc-unknown-none-elf]
+runner = "espflash flash --monitor"
+
+
+[env]
+ESP_LOGLEVEL="INFO"
+
+[build]
+rustflags = [
+  # Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)
+  # NOTE: May negatively impact performance of produced code
+  "-C", "force-frame-pointers",
+]
+
+target = "riscv32imc-unknown-none-elf"
+
+[profile.dev]
+opt-level = "s"
+debug = false
+strip = "none"
+debug-assertions = false
+overflow-checks = false
+lto = false
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = false
+
+[unstable]
+build-std = ["alloc", "core"]
