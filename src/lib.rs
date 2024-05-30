@@ -194,6 +194,8 @@ impl core::fmt::Debug for Address {
 pub struct Search {
     command: u8,
     address: u64,
+    #[cfg(feature = "search-masks")]
+    address_mask: u64,
     last_discrepancy: Option<usize>,
     complete: bool,
 }
@@ -208,7 +210,9 @@ impl Search {
     pub fn new() -> Search {
         Search {
             command: 0xF0,
-            address: 0, // [false; 64],
+            address: 0,
+            #[cfg(feature = "search-masks")]
+            address_mask: 0,
             last_discrepancy: None,
             complete: false,
         }
@@ -216,7 +220,19 @@ impl Search {
     pub fn new_alarm() -> Search {
         Search {
             command: 0xEC,
-            address: 0, // [false; 64],
+            address: 0,
+            #[cfg(feature = "search-masks")]
+            address_mask: 0,
+            last_discrepancy: None,
+            complete: false,
+        }
+    }
+    #[cfg(feature = "search-masks")]
+    pub fn new_with_mask(fixed_bits: u64, bit_mask: u64) {
+        Search {
+            command: 0xEC,
+            address: fixed_bits,
+            address_mask: bit_mask,
             last_discrepancy: None,
             complete: false,
         }
@@ -235,6 +251,10 @@ impl Search {
             for id_bit_number in 0..64 {
                 let id_bits = ow.exchange_bits([true, true]).await;
                 let search_direction = match id_bits {
+                    #[cfg(feature = "search-masks")]
+                    _ if address_mask & (1 << id_bit_number) != 0 => {
+                        address & (1 << id_bit_number) != 0
+                    }
                     [false, true] => false,
                     [true, false] => true,
                     [true, true] => {
