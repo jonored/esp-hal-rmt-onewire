@@ -44,18 +44,26 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         let rx = rxcc
             .configure(unsafe { pin.clone_unchecked() }, rx_config)
             .unwrap();
-        pin.internal_pull_up(true);
-        pin.enable_output(true);
-        pin.enable_open_drain(true);
-        pin.enable_input(true);
-        pin.set_drive_strength(hal::gpio::DriveStrength::I40mA);
-        pin.connect_input_to_peripheral_with_options(hal::gpio::InputSignal::RMT_SIG_0, true, true);
+        let mut pin = unsafe { pin.clone_unchecked() };
+        struct Tag;
+        pin.internal_pull_up(true, unsafe { core::mem::transmute(Tag) });
+        pin.enable_output(true, unsafe { core::mem::transmute(Tag) });
+        pin.enable_input(true, unsafe { core::mem::transmute(Tag) });
+        pin.set_drive_strength(hal::gpio::DriveStrength::I40mA, unsafe { core::mem::transmute(Tag) });
+        pin.enable_open_drain(true, unsafe { core::mem::transmute(Tag) });
+        // let flexpin=Flex::new(pin);
+        // flexpin.peripheral_input().inverted().connect_input_to_peripheral(hal::gpio::InputSignal::RMT_SIG_0, unsafe { core::mem::transmute(Tag) });
+        // flexpin.into_peripheral_output().inverted().connect_peripheral_to_output(hal::gpio::OutputSignal::RMT_SIG_0, unsafe { core::mem::transmute(Tag) });
+        
+        
+        pin.connect_input_to_peripheral_with_options(hal::gpio::InputSignal::RMT_SIG_0, true, true, unsafe { core::mem::transmute(Tag) });
         pin.connect_peripheral_to_output_with_options(
             hal::gpio::OutputSignal::RMT_SIG_0,
             true,
             false,
             false,
             true,
+            unsafe { core::mem::transmute(Tag) }
         );
 
         OneWire { rx, tx }
@@ -183,11 +191,21 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct Address(u64);
 
 impl core::fmt::Debug for Address {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         core::write!(f, "{:X?}", self.0.to_le_bytes())
+    }
+}
+
+impl core::fmt::Display for Address {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+        for k in self.0.to_le_bytes() {
+		core::write!(f, "{:X}", k)?;
+        }
+        Ok(())
     }
 }
 
