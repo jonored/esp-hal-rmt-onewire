@@ -1,6 +1,6 @@
 [package]
 name = "esp-hal-rmt-onewire"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "RMT adapter for onewire with esp-hal and embassy"
 license = "MIT OR Apache-2.0"
@@ -21,3 +21,7 @@ embassy-time = "0.3.2"
 esp-hal-embassy = { version = "0.3.0", features=["esp32c3", "integrated-timers"] }
 fixed = "1.28.0"
 
+[package.metadata.docs.rs]
+features = [ "esp-hal/esp32c3" ]
+default-target = "riscv32imc-unknown-none-elf"
+targets = ["riscv32imc-unknown-none-elf"]
