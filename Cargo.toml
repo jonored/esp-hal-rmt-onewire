@@ -10,15 +10,15 @@ search-masks = []
 
 [dependencies]
 embassy-futures = { version = "0.1.1" }
-esp-hal = { version = "0.20.1", features=["async"] }
+esp-hal = { version = "1.0.0-beta.0", features = [ "unstable" ] }
 
 [dev-dependencies]
-embassy-executor = { version="0.6.0" }
-esp-hal = { version = "0.20.1", features=["esp32c3"] }
-esp-backtrace = { version="0.14.1", features=["esp32c3", "println", "exception-handler", "panic-handler"] }
-esp-println = { version="0.11.0", features=["esp32c3"] }
-embassy-time = "0.3.2"
-esp-hal-embassy = { version = "0.3.0", features=["esp32c3", "integrated-timers"] }
+embassy-executor = { version="0.7.0" }
+esp-hal = { version = "1.0.0-beta.0", features=["esp32c3"] }
+esp-backtrace = { version="0.15.1", features=["esp32c3", "println", "exception-handler", "panic-handler"] }
+esp-println = { version="0.13.0", features=["esp32c3"] }
+embassy-time = "0.4.0"
+esp-hal-embassy = { version = "0.7.0", features=["esp32c3"] }
 fixed = "1.28.0"
 
 [package.metadata.docs.rs]

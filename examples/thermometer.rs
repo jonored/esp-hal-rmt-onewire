@@ -4,19 +4,18 @@ use embassy_executor::Spawner;
 use esp_backtrace as _;
 use esp_println::println;
 use embassy_time::{Duration, Timer};
-use esp_hal::{gpio::Io, rmt::{*, asynch::*}, peripherals::Peripherals, prelude::*, timer::timg::TimerGroup, clock::ClockControl, system::SystemControl};
+use esp_hal::{rmt::*, timer::systimer::SystemTimer, clock::CpuClock, time::Rate};
 use esp_hal_rmt_onewire::*;
 
 #[esp_hal_embassy::main]
-async fn main(spawner: Spawner) -> ! {
-    let peripherals = Peripherals::take();
-    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-    let clocks = ClockControl::boot_defaults(SystemControl::new(peripherals.SYSTEM).clock_control).freeze();
-    let timer_group0 = TimerGroup::new(peripherals.TIMG0, &clocks);
-    esp_hal_embassy::init(&clocks, timer_group0.timer0);
-    let rmt = Rmt::new_async(peripherals.RMT, 80_u32.MHz(), &clocks).unwrap();
-    let mut ow = OneWire::new(rmt.channel0, rmt.channel2, io.pins.gpio6);
-    // let mut ow = OneWire::new(rmt.channel0, rmt.channel2, io.pins.gpio6);// Flex::new(io.pins.gpio7));
+async fn main(_spawner: Spawner) -> ! {
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
+    let timer0 = SystemTimer::new(peripherals.SYSTIMER);
+    esp_hal_embassy::init(timer0.alarm0);
+    
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80_u32)).unwrap().into_async();
+    let mut ow = OneWire::new(rmt.channel0, rmt.channel2, peripherals.GPIO6);
     
     loop {
         println!("Resetting the bus");
@@ -28,7 +27,7 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         println!("Scanning the bus to retrieve the measured temperatures");
-        let samples = search(&mut ow).await;
+        search(&mut ow).await;
 
         println!("Waiting for 10 seconds");
         Timer::after(Duration::from_secs(10)).await;
