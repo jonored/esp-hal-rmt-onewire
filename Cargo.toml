@@ -1,6 +1,6 @@
 [package]
 name = "esp-hal-rmt-onewire"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "RMT adapter for onewire with esp-hal and embassy"
 license = "MIT OR Apache-2.0"
