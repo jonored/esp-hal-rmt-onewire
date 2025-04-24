@@ -4,11 +4,14 @@
 
 use esp_hal as hal;
 
-use hal::gpio::{InputPin,OutputPin,Pull,Level, Flex};
-use hal::peripheral::*;
-use hal::rmt::{RxChannelConfig, TxChannelConfig, RxChannelAsync, TxChannelAsync, PulseCode, TxChannelCreatorAsync, RxChannelCreatorAsync};
-use hal::gpio::interconnect::*;
 use embassy_futures::select::*;
+use hal::gpio::interconnect::*;
+use hal::gpio::{Flex, InputPin, Level, OutputPin, Pull};
+use hal::peripheral::*;
+use hal::rmt::{
+    PulseCode, RxChannelAsync, RxChannelConfig, RxChannelCreatorAsync, TxChannelAsync,
+    TxChannelConfig, TxChannelCreatorAsync,
+};
 
 pub struct OneWire<R: RxChannelAsync, T: TxChannelAsync> {
     rx: R,
@@ -35,17 +38,19 @@ impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
             .with_clk_divider(80)
             .with_carrier_modulation(false);
 
-        let mut pin : Flex = Flex::new(pin.into());
+        let mut pin: Flex = Flex::new(pin.into());
 
         // Clone the pin so we can still overwrite the (wrong) config set by the rmt tx and rx driver setup:
         let (insig, outsig) = unsafe { pin.clone_unchecked() }.split();
 
         let tx = txcc
-            .configure(outsig.inverted(), tx_config).map_err(Error::SendError)?;
+            .configure(outsig.inverted(), tx_config)
+            .map_err(Error::SendError)?;
         let rx = rxcc
-            .configure(insig.inverted(), rx_config).map_err(Error::ReceiveError)?;
-       
-        // Then we set the pin up correctly: 
+            .configure(insig.inverted(), rx_config)
+            .map_err(Error::ReceiveError)?;
+
+        // Then we set the pin up correctly:
         pin.set_as_open_drain(Pull::Up);
         pin.set_drive_strength(hal::gpio::DriveStrength::_40mA);
         pin.enable_input(true);
@@ -71,8 +76,7 @@ impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         Ok(indata[0].length1() > 0
             && indata[0].length2() > 0
             && indata[1].length1() > 100
-            && indata[1].length1() < 200
-        )
+            && indata[1].length1() < 200)
     }
 
     pub async fn send_and_receive(
@@ -85,13 +89,18 @@ impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
             Err(Error::InputNotHigh)?;
         }
         // This relies on select polling in order to set up the rx & tx registers, which is not strictly documented behavior.
-        let res = select(self.rx.receive(indata), async { let r = self.tx.transmit(data).await; let _ = self.tx.transmit(&delay).await; r } ).await;
+        let res = select(self.rx.receive(indata), async {
+            let r = self.tx.transmit(data).await;
+            let _ = self.tx.transmit(&delay).await;
+            r
+        })
+        .await;
         T::stop(); // Need to use the internal interface to stop our TX-based timeout here.
         match res {
-           Either::First(Ok(r)) => Ok(r),
-           Either::First(Err(r)) => Err(Error::ReceiveError(r)),
-           Either::Second(Ok(())) => Err(Error::ReceiveTimedOut),
-           Either::Second(Err(e)) => Err(Error::SendError(e)),
+            Either::First(Ok(r)) => Ok(r),
+            Either::First(Err(r)) => Err(Error::ReceiveError(r)),
+            Either::Second(Ok(())) => Err(Error::ReceiveTimedOut),
+            Either::Second(Err(e)) => Err(Error::SendError(e)),
         }
     }
 
@@ -100,9 +109,19 @@ impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
 
     pub fn encode_bit(bit: bool) -> u32 {
         if bit {
-            PulseCode::new(Level::High, Self::ONE_BIT_LEN, Level::Low, Self::ZERO_BIT_LEN)
+            PulseCode::new(
+                Level::High,
+                Self::ONE_BIT_LEN,
+                Level::Low,
+                Self::ZERO_BIT_LEN,
+            )
         } else {
-            PulseCode::new(Level::High, Self::ZERO_BIT_LEN, Level::Low, Self::ONE_BIT_LEN)
+            PulseCode::new(
+                Level::High,
+                Self::ZERO_BIT_LEN,
+                Level::Low,
+                Self::ONE_BIT_LEN,
+            )
         }
     }
 
@@ -140,7 +159,10 @@ impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         Ok(())
     }
 
-    pub async fn exchange_bits<const N: usize>(&mut self, bits: [bool; N]) -> Result<[bool; N], Error>
+    pub async fn exchange_bits<const N: usize>(
+        &mut self,
+        bits: [bool; N],
+    ) -> Result<[bool; N], Error>
     where
         [(); N + 1]:,
     {
@@ -157,7 +179,7 @@ impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         Ok(res)
     }
 
-    pub async fn send_u64(&mut self, val: u64) -> Result<(), Error>{
+    pub async fn send_u64(&mut self, val: u64) -> Result<(), Error> {
         for byte in val.to_le_bytes() {
             self.send_byte(byte).await?;
         }
@@ -178,7 +200,7 @@ pub enum Error {
 }
 
 impl From<esp_hal::rmt::Error> for Error {
-    fn from(e : esp_hal::rmt::Error) -> Error {
+    fn from(e: esp_hal::rmt::Error) -> Error {
         Error::SendError(e)
     }
 }
@@ -195,7 +217,7 @@ impl core::fmt::Debug for Address {
 impl core::fmt::Display for Address {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         for k in self.0.to_le_bytes() {
-		core::write!(f, "{:X}", k)?;
+            core::write!(f, "{:X}", k)?;
         }
         Ok(())
     }
@@ -219,7 +241,7 @@ pub enum SearchError {
 
 impl From<Error> for SearchError {
     fn from(e: Error) -> SearchError {
-       SearchError::BusError(e)
+        SearchError::BusError(e)
     }
 }
 
