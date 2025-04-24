@@ -4,21 +4,20 @@
 
 use esp_hal as hal;
 
-use embassy_futures::join::*;
-use hal::gpio::{InputPin,OutputPin,Pull,Level};
+use hal::gpio::{InputPin,OutputPin,Pull,Level, Flex};
 use hal::peripheral::*;
 use hal::rmt::{RxChannelConfig, TxChannelConfig, RxChannelAsync, TxChannelAsync, PulseCode, TxChannelCreatorAsync, RxChannelCreatorAsync};
 use hal::gpio::interconnect::*;
-use hal::gpio::Flex;
+use embassy_futures::select::*;
 
 pub struct OneWire<R: RxChannelAsync, T: TxChannelAsync> {
     rx: R,
     tx: T,
+    input: InputSignal,
 }
 
-impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
+impl<'d, R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
     pub fn new<
-        'd,
         Tx: TxChannelCreatorAsync<'d, T, OutputSignal>,
         Rx: RxChannelCreatorAsync<'d, R, InputSignal>,
         P: 'd + InputPin + OutputPin + Peripheral<P = P>,
@@ -26,7 +25,7 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         txcc: Tx,
         rxcc: Rx,
         pin: P,
-    ) -> OneWire<R, T> {
+    ) -> Result<OneWire<R, T>, Error> {
         let rx_config = RxChannelConfig::default()
             .with_clk_divider(80)
             .with_idle_threshold(1000)
@@ -36,32 +35,30 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
             .with_clk_divider(80)
             .with_carrier_modulation(false);
 
-        let mut pin_connection : Flex = Flex::new(pin.into());
+        let mut pin : Flex = Flex::new(pin.into());
 
         // Clone the pin so we can still overwrite the (wrong) config set by the rmt tx and rx driver setup:
-        let (insig, outsig) = unsafe { pin_connection.clone_unchecked() }.split();
+        let (insig, outsig) = unsafe { pin.clone_unchecked() }.split();
 
         let tx = txcc
-            .configure(outsig.inverted(), tx_config)
-            .unwrap();
+            .configure(outsig.inverted(), tx_config).map_err(Error::SendError)?;
         let rx = rxcc
-            .configure(insig.inverted(), rx_config)
-            .unwrap();
+            .configure(insig.inverted(), rx_config).map_err(Error::ReceiveError)?;
        
         // Then we set the pin up correctly: 
-        pin_connection.set_as_open_drain(Pull::Up);
-        pin_connection.set_drive_strength(hal::gpio::DriveStrength::_40mA);
-        pin_connection.enable_input(true);
+        pin.set_as_open_drain(Pull::Up);
+        pin.set_drive_strength(hal::gpio::DriveStrength::_40mA);
+        pin.enable_input(true);
 
         // and connect the physical peripherals back up to the GPIO matrix:
-        let (insig, outsig) = pin_connection.split();
-        R::input_signal().connect_to(insig.inverted());
+        let (input, outsig) = pin.split();
+        R::input_signal().connect_to(input.clone().inverted());
         T::output_signal().connect_to(outsig.inverted());
 
-        OneWire { rx, tx }
+        Ok(OneWire { rx, tx, input })
     }
 
-    pub async fn reset(&mut self) -> bool {
+    pub async fn reset(&mut self) -> Result<bool, Error> {
         let data = [
             PulseCode::new(Level::Low, 60, Level::High, 600),
             PulseCode::new(Level::Low, 600, Level::Low, 0),
@@ -69,23 +66,33 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         ];
         let mut indata = [PulseCode::empty(); 10];
 
-        // TODO: error handling
-        let _res = self.send_and_receive(&mut indata, &data).await;
+        let _res = self.send_and_receive(&mut indata, &data).await?;
 
-        indata[0].length1() > 0
+        Ok(indata[0].length1() > 0
             && indata[0].length2() > 0
             && indata[1].length1() > 100
             && indata[1].length1() < 200
+        )
     }
 
     pub async fn send_and_receive(
         &mut self,
         indata: &mut [u32],
         data: &[u32],
-    ) -> Result<(), esp_hal::rmt::Error> {
-        // This relies on join polling in order to set up the rx & tx registers, which is not strictly documented behavior.
-        let res = join(self.rx.receive(indata), self.tx.transmit(data)).await;
-        res.0.and(res.1)
+    ) -> Result<(), Error> {
+        let delay = [PulseCode::new(Level::Low, 30000, Level::Low, 0)]; // timeout delay for 30ms using the RMT tx peripheral.
+        if self.input.level() == Level::Low {
+            Err(Error::InputNotHigh)?;
+        }
+        // This relies on select polling in order to set up the rx & tx registers, which is not strictly documented behavior.
+        let res = select(self.rx.receive(indata), async { let r = self.tx.transmit(data).await; let _ = self.tx.transmit(&delay).await; r } ).await;
+        T::stop(); // Need to use the internal interface to stop our TX-based timeout here.
+        match res {
+           Either::First(Ok(r)) => Ok(r),
+           Either::First(Err(r)) => Err(Error::ReceiveError(r)),
+           Either::Second(Ok(())) => Err(Error::ReceiveTimedOut),
+           Either::Second(Err(e)) => Err(Error::SendError(e)),
+        }
     }
 
     const ZERO_BIT_LEN: u16 = 70;
@@ -108,33 +115,32 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         }
     }
 
-    pub async fn exchange_byte(&mut self, byte: u8) -> u8 {
+    pub async fn exchange_byte(&mut self, byte: u8) -> Result<u8, Error> {
         let mut data = [PulseCode::empty(); 10];
         let mut indata = [PulseCode::empty(); 10];
         for n in 0..8 {
             data[n] = Self::encode_bit(0 != byte & 1 << n);
         }
-        // TODO: error handling
-        let _res = self.send_and_receive(&mut indata, &data).await;
+        let _res = self.send_and_receive(&mut indata, &data).await?;
         let mut res: u8 = 0;
         for n in 0..8 {
             if Self::decode_bit(indata[n]) {
                 res |= 1 << n;
             }
         }
-        res
+        Ok(res)
     }
 
-    pub async fn send_byte(&mut self, byte: u8) {
+    pub async fn send_byte(&mut self, byte: u8) -> Result<(), Error> {
         let mut data = [PulseCode::empty(); 10];
         for n in 0..8 {
             data[n] = Self::encode_bit(0 != byte & 1 << n);
         }
-        // TODO: error handling
-        let _res = self.tx.transmit(&data).await;
+        let _res = self.tx.transmit(&data).await?;
+        Ok(())
     }
 
-    pub async fn exchange_bits<const N: usize>(&mut self, bits: [bool; N]) -> [bool; N]
+    pub async fn exchange_bits<const N: usize>(&mut self, bits: [bool; N]) -> Result<[bool; N], Error>
     where
         [(); N + 1]:,
     {
@@ -143,23 +149,37 @@ impl<R: RxChannelAsync, T: TxChannelAsync> OneWire<R, T> {
         for n in 0..N {
             data[n] = Self::encode_bit(bits[n]);
         }
-        // TODO: error handling
-        let _res = self.send_and_receive(&mut indata, &data).await;
+        let _res = self.send_and_receive(&mut indata, &data).await?;
         let mut res: [bool; N] = [false; N];
         for n in 0..N {
             res[n] = Self::decode_bit(indata[n]);
         }
-        res
+        Ok(res)
     }
 
-    pub async fn send_u64(&mut self, val: u64) {
+    pub async fn send_u64(&mut self, val: u64) -> Result<(), Error>{
         for byte in val.to_le_bytes() {
-            self.send_byte(byte).await;
+            self.send_byte(byte).await?;
         }
+        Ok(())
     }
 
-    pub async fn send_address(&mut self, val: Address) {
+    pub async fn send_address(&mut self, val: Address) -> Result<(), Error> {
         self.send_u64(val.0).await
+    }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    InputNotHigh,
+    ReceiveTimedOut,
+    ReceiveError(esp_hal::rmt::Error),
+    SendError(esp_hal::rmt::Error),
+}
+
+impl From<esp_hal::rmt::Error> for Error {
+    fn from(e : esp_hal::rmt::Error) -> Error {
+        Error::SendError(e)
     }
 }
 
@@ -194,6 +214,13 @@ pub struct Search {
 pub enum SearchError {
     SearchComplete,
     NoDevicesPresent,
+    BusError(Error),
+}
+
+impl From<Error> for SearchError {
+    fn from(e: Error) -> SearchError {
+       SearchError::BusError(e)
+    }
 }
 
 impl Search {
@@ -227,19 +254,19 @@ impl Search {
             complete: false,
         }
     }
-    pub async fn next<R: RxChannelAsync, T: TxChannelAsync>(
+    pub async fn next<'d, R: RxChannelAsync, T: TxChannelAsync>(
         &mut self,
         ow: &mut OneWire<R, T>,
     ) -> Result<Address, SearchError> {
         if self.complete {
             return Err(SearchError::SearchComplete);
         }
-        let have_devices = ow.reset().await;
+        let have_devices = ow.reset().await?;
         let mut last_zero = None;
-        ow.send_byte(self.command).await;
+        ow.send_byte(self.command).await?;
         if have_devices {
             for id_bit_number in 0..64 {
-                let id_bits = ow.exchange_bits([true, true]).await;
+                let id_bits = ow.exchange_bits([true, true]).await?;
                 let search_direction = match id_bits {
                     #[cfg(feature = "search-masks")]
                     _ if address_mask & (1 << id_bit_number) != 0 => {
@@ -266,7 +293,7 @@ impl Search {
                 } else {
                     self.address &= !(1 << id_bit_number);
                 }
-                ow.exchange_bits([search_direction]).await;
+                ow.exchange_bits([search_direction]).await?;
             }
             self.last_discrepancy = last_zero;
             self.complete = last_zero.is_none();

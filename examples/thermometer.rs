@@ -15,15 +15,15 @@ async fn main(_spawner: Spawner) -> ! {
     esp_hal_embassy::init(timer0.alarm0);
     
     let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80_u32)).unwrap().into_async();
-    let mut ow = OneWire::new(rmt.channel0, rmt.channel2, peripherals.GPIO6);
+    let mut ow = OneWire::new(rmt.channel0, rmt.channel2, peripherals.GPIO6).unwrap();
     
     loop {
         println!("Resetting the bus");
-        ow.reset().await;
+        ow.reset().await.unwrap();
 
         println!("Broadcasting a measure temperature command to all attached sensors");
         for a in [0xCC, 0x44] {
-            ow.send_byte(a).await;
+            ow.send_byte(a).await.unwrap();
         }
 
         println!("Scanning the bus to retrieve the measured temperatures");
@@ -54,12 +54,12 @@ pub async fn search<R: RxChannelAsync, T: TxChannelAsync>(ow: &mut OneWire<R, T>
         match search.next(ow).await {
             Ok(address) => {
                 println!("Reading device {:?}", address);
-                ow.reset().await;
-                ow.send_byte(0x55).await;
-                ow.send_address(address).await;
-                ow.send_byte(0xBE).await;
-                let temp_low = ow.exchange_byte(0xFF).await;
-                let temp_high = ow.exchange_byte(0xFF).await;
+                ow.reset().await.unwrap();
+                ow.send_byte(0x55).await.unwrap();
+                ow.send_address(address).await.unwrap();
+                ow.send_byte(0xBE).await.unwrap();
+                let temp_low = ow.exchange_byte(0xFF).await.expect("failed to get low byte of temperature");
+                let temp_high = ow.exchange_byte(0xFF).await.expect("failed to get high byte of temperature");
                 let temp = fixed::types::I12F4::from_le_bytes([temp_low, temp_high]);
                 println!("Temp is: {temp}");
             }
