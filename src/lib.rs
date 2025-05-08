@@ -206,7 +206,7 @@ impl From<esp_hal::rmt::Error> for Error {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
-pub struct Address(u64);
+pub struct Address(pub u64);
 
 impl core::fmt::Debug for Address {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
