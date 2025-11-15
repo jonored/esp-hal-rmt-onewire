@@ -1,23 +1,53 @@
 #![no_std]
 #![no_main]
-use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use esp_backtrace as _;
-use esp_hal::{clock::CpuClock, rmt::*, time::Rate, timer::systimer::SystemTimer};
-use esp_hal_rmt_onewire::*;
-use esp_println::println;
 
-#[esp_hal_embassy::main]
-async fn main(_spawner: Spawner) -> ! {
+#[cfg(not(any(feature = "example-esp32c3", feature = "example-esp32c6")))]
+compile_error!(
+    "Enable either the `example-esp32c3` or `example-esp32c6` feature to build this example."
+);
+
+#[cfg(all(feature = "example-esp32c3", feature = "example-esp32c6"))]
+compile_error!("Only one example target feature can be enabled at a time.");
+
+use embassy_executor::{Executor, task};
+use esp_backtrace as _;
+use esp_hal::{clock::CpuClock, delay::Delay, rmt::*, time::Rate};
+use esp_hal_rmt_onewire::{OneWire, Search};
+use esp_println::println;
+use static_cell::StaticCell;
+
+static EXECUTOR: StaticCell<Executor> = StaticCell::new();
+
+#[cfg(feature = "example-deps")]
+esp_bootloader_esp_idf::esp_app_desc!();
+
+#[esp_hal::main]
+fn main() -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
-    let timer0 = SystemTimer::new(peripherals.SYSTIMER);
-    esp_hal_embassy::init(timer0.alarm0);
+
+    #[cfg(feature = "example-esp32c3")]
+    let onewire_pin = peripherals.GPIO6;
+
+    #[cfg(feature = "example-esp32c6")]
+    let onewire_pin = peripherals.GPIO18;
 
     let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80_u32))
         .unwrap()
         .into_async();
-    let mut ow = OneWire::new(rmt.channel0, rmt.channel2, peripherals.GPIO6).unwrap();
+    let ow = OneWire::new(rmt.channel0, rmt.channel2, onewire_pin).unwrap();
+
+    let executor = EXECUTOR.init(Executor::new());
+    executor.run(move |spawner| {
+        spawner
+            .spawn(thermometer(ow))
+            .expect("failed to start thermometer task");
+    })
+}
+
+#[task]
+async fn thermometer(mut ow: OneWire<'static>) -> ! {
+    let delay = Delay::new();
 
     loop {
         println!("Resetting the bus");
@@ -32,7 +62,7 @@ async fn main(_spawner: Spawner) -> ! {
         search(&mut ow).await;
 
         println!("Waiting for 10 seconds");
-        Timer::after(Duration::from_secs(10)).await;
+        delay.delay_millis(10_000);
     }
 }
 
@@ -50,7 +80,7 @@ impl core::fmt::Display for Temperature {
     }
 }
 
-pub async fn search<'a, CFG: OneWireConfig>(ow: &mut OneWire<'a, CFG>) -> () {
+pub async fn search<'a>(ow: &mut OneWire<'a>) -> () {
     let mut search = Search::new();
     loop {
         match search.next(ow).await {
